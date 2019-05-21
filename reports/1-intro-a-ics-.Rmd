@@ -41,7 +41,6 @@ Imagine por agora que os dados que temos do Last.fm são completos. Que são a p
 theta = lastfm %>%  
   pull(news) %>% 
   mean() # theta: média calculada com todos os dados
-
 theta
 ```
 

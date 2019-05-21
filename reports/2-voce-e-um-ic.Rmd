@@ -1,6 +1,6 @@
 ---
 title: "Implementando ICs"
-author: "Nazareno"
+author: "Whendell Feijó Magalhães"
 output:
   html_document:
     theme: readable
@@ -11,6 +11,7 @@ output:
     theme: readable
     toc: yes
     toc_float: yes
+    code_folding: hide
 ---
 
 ```{r setup, include=FALSE, message=FALSE}
@@ -18,6 +19,10 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 theme_set(theme_bw())
 ```
+
+## Proporção de artistas novos e popularidade
+
+São utilizados ICs para estimar duas métricas (*proporção de novos artistas em geral escutada por usuários* e *correlação entre a popularidade mediana dos artistas escutado e a proporção dos artistas escutados que eram novos*) sobre os usuários do LastFM em geral durante um período de 6 meses. Em ambos os casos as estimações são feitas a partir de uma amostra de 300 usuários.
 
 ## Os dados
 
@@ -32,14 +37,110 @@ lastfm = lastfm %>%
   sample_n(300) %>% 
   select(news, old, mediana_pop)
 
-glimpse(lastfm)
 ```
 
-## Proporção de artistas novos e popularidade
+### 1. Qual a proporção de novos artistas em geral escutada por usuários?
 
-Utilizaremos ICs para estimar duas métricas sobre os usuários do LastFM em geral durante um período de 6 meses. Em ambos os casos faremos isso a partir de uma amostra de 300 usuários. As duas métricas são: 
+```{r}
 
-1. Qual a proporção de novos artistas em geral escutada por usuários?
-2. Para os usuários que gostam de música muito pop (mediana_pop > 5), qual a correlação entre a popularidade mediana dos artistas escutado e a proporção dos artistas escutados que eram novos. 
+calcula_theta = function(df) {
+  df %>%
+    pull(prop_news) %>% 
+    mean()
+}
 
-Crie intervalos com 95% de confiança.
+lastfm = lastfm %>% 
+            mutate(prop_news = news / (news + old))
+
+theta_c = calcula_theta(lastfm)
+
+```
+
+```{r}
+
+repeticoes = 4000 # pelo menos 2000, mas mais não faz mal.
+
+um_bootstrap <- function(x){
+  prop_news = x %>% pull(prop_news)
+  boot_x <- sample(prop_news,           # amostre dos dados
+                   size = NROW(prop_news), # tamanho igual ao recebido
+                   replace = TRUE) # aqui é o bootstrap
+  return(mean(boot_x))
+}
+
+set.seed(1995)
+
+# A REAMOSTRAGEM
+reamostragens = tibble(i = 1:repeticoes) %>% 
+  mutate(theta_c_s = map_dbl(i, ~ um_bootstrap(lastfm)))
+
+reamostragens %>%
+  ggplot(aes(x = theta_c_s, xmin = -Inf, xmax = Inf)) +
+  geom_density(binwidth = 0.005,
+                 colour = "darkorange",
+                 fill = "white")
+
+reamostragens %>%
+  ggplot(aes(x = theta_c_s - theta_c, xmin = -Inf, xmax = Inf)) +
+  geom_density(binwidth = 0.005,
+                 colour = "darkblue",
+                 fill = "white")
+```
+
+Definindo o intervalo com 95% de confiança:
+
+```{r}
+intervalo = reamostragens %>%
+  mutate(erro = theta_c_s - theta_c) %>% 
+  summarise(erro_i = quantile(erro, .025), 
+            erro_s = quantile(erro, .975))
+
+intervalo
+```
+
+```{r}
+intervalo = intervalo %>% 
+  mutate(valor_i = theta_c + erro_i, 
+         valor_s = theta_c + erro_s)
+
+intervalo
+```
+
+```{r}
+
+ggplot() +
+    geom_pointrange(aes(x = "",
+                        y = theta_c,
+                        ymin = intervalo$valor_i,
+                        ymax = intervalo$valor_s
+    )) +
+    geom_point(size = 3) + 
+    labs(x = "Média", 
+         y = "Proporção  de novos artistas dos usuários",
+         title = expression("\t\t\t\tIntervalo estimado via bootstrap"))
+
+# ggplot() +
+#   geom_rect(
+#     data = intervalo,
+#     aes(xmin = valor_i, xmax = valor_s),
+#     ymin = -Inf,
+#     ymax = Inf,
+#     fill = "red",
+#     alpha = .3
+#   ) +
+#   geom_histogram(
+#     data = reamostragens,
+#     aes(theta_c_s),
+#     binwidth = .005,
+#     fill = "white",
+#     colour = "darkgrey"
+#   ) +
+#   geom_vline(xintercept = theta_c,
+#              color = "red",
+#              size = 1.2) +
+#   labs(title = expression("\t\t\t\tIntervalo estimado via bootstrap"))
+```
+
+### 2. Para os usuários que gostam de música muito pop (mediana_pop > 5), qual a correlação entre a popularidade mediana dos artistas escutado e a proporção dos artistas escutados que eram novos. 
+
+
