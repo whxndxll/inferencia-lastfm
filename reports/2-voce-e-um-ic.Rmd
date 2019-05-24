@@ -6,13 +6,18 @@ output:
     theme: readable
     df_print: paged
     toc: yes
+    code_folding: show 
   html_notebook:
     fig_width: 7
     theme: readable
     toc: yes
     toc_float: yes
-    code_folding: hide
 ---
+
+<style>
+body{
+text-align: justify}
+</style>
 
 ```{r setup, include=FALSE, message=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -37,9 +42,12 @@ lastfm = lastfm %>%
   sample_n(300) %>% 
   select(news, old, mediana_pop)
 
+glimpse(lastfm)
 ```
 
 ### 1. Qual a proporção de novos artistas em geral escutada por usuários?
+
+Inicialmente, foi calculado o $\hat\theta$ (média de novos artistas) da amostra:
 
 ```{r}
 
@@ -55,6 +63,8 @@ lastfm = lastfm %>%
 theta_c = calcula_theta(lastfm)
 
 ```
+
+Estimando usando uma implementação própria do bootstrap:
 
 ```{r}
 
@@ -73,18 +83,6 @@ set.seed(1995)
 # A REAMOSTRAGEM
 reamostragens = tibble(i = 1:repeticoes) %>% 
   mutate(theta_c_s = map_dbl(i, ~ um_bootstrap(lastfm)))
-
-reamostragens %>%
-  ggplot(aes(x = theta_c_s, xmin = -Inf, xmax = Inf)) +
-  geom_density(binwidth = 0.005,
-                 colour = "darkorange",
-                 fill = "white")
-
-reamostragens %>%
-  ggplot(aes(x = theta_c_s - theta_c, xmin = -Inf, xmax = Inf)) +
-  geom_density(binwidth = 0.005,
-                 colour = "darkblue",
-                 fill = "white")
 ```
 
 Definindo o intervalo com 95% de confiança:
@@ -95,52 +93,152 @@ intervalo = reamostragens %>%
   summarise(erro_i = quantile(erro, .025), 
             erro_s = quantile(erro, .975))
 
-intervalo
-```
-
-```{r}
 intervalo = intervalo %>% 
   mutate(valor_i = theta_c + erro_i, 
          valor_s = theta_c + erro_s)
-
-intervalo
 ```
+
+Estimando usando o pacote boot:
+
+```{r}
+library(boot)
+library(broom)
+
+theta <- function(d, i) {
+    agrupado = d %>% 
+        slice(i) %>% 
+        pull(prop_news) %>%
+        mean()
+}
+
+booted <- boot(data = lastfm, 
+               statistic = theta, 
+               R = 4000)
+
+ci = tidy(booted, 
+          conf.level = .95,
+          conf.method = "bca",
+          conf.int = TRUE)
+```
+ 
+No gráfico podemos visualizar as estimativas calculadas usando uma implementação própria do bootstrap e usando o bootstrap do pacote _boot_:
 
 ```{r}
 
 ggplot() +
-    geom_pointrange(aes(x = "",
+    geom_pointrange(aes(x = "Implementação própria",
                         y = theta_c,
                         ymin = intervalo$valor_i,
                         ymax = intervalo$valor_s
-    )) +
+                    )) +
+    geom_pointrange(aes(x = "Pacote boot",
+                      y = ci$statistic,
+                      ymin = ci$conf.low,
+                      ymax = ci$conf.high
+                      )) +
     geom_point(size = 3) + 
-    labs(x = "Média", 
+    labs(x = "Implementação do método de bootstrap", 
          y = "Proporção  de novos artistas dos usuários",
-         title = expression("\t\t\t\tIntervalo estimado via bootstrap"))
-
-# ggplot() +
-#   geom_rect(
-#     data = intervalo,
-#     aes(xmin = valor_i, xmax = valor_s),
-#     ymin = -Inf,
-#     ymax = Inf,
-#     fill = "red",
-#     alpha = .3
-#   ) +
-#   geom_histogram(
-#     data = reamostragens,
-#     aes(theta_c_s),
-#     binwidth = .005,
-#     fill = "white",
-#     colour = "darkgrey"
-#   ) +
-#   geom_vline(xintercept = theta_c,
-#              color = "red",
-#              size = 1.2) +
-#   labs(title = expression("\t\t\t\tIntervalo estimado via bootstrap"))
+         title = expression("\tProporção novos artistas: Intervalo estimado via bootstrap - 95% CI"))
 ```
 
-### 2. Para os usuários que gostam de música muito pop (mediana_pop > 5), qual a correlação entre a popularidade mediana dos artistas escutado e a proporção dos artistas escutados que eram novos. 
+A patir desta amostra estimamos que a média da proporção de artistas novos consumidos durante 6 meses foi de $ \tilde\ 0.24$, a partir da análise do intervalo podemos inferir que a média desta métrica na população fica entre 0.231 e 0.254, com 95% de confiança. O valores para a implemtantação própria foram: $\hat\theta = 0.242366$, $95\%$ CI [$0.2305119, 0.2537466$] para a implementação própria e $\hat\theta = 0.242366$, $95\%$ CI [$0.2312781, 0.2542668$] para a estimação usando a biblioteca _boot_.
 
+### 2. Para os usuários que gostam de música muito pop (mediana_pop > 5), qual a correlação entre a popularidade mediana dos artistas escutados e a proporção dos artistas escutados que eram novos. 
+
+Visualizando a correlação sob os dados da amostra:
+
+```{r}
+lastfm %>% 
+  filter(mediana_pop > 5) %>% 
+    ggplot(aes(x = mediana_pop, y = prop_news)) +
+    geom_point(color = "red", size = 3, alpha = 0.45)
+```
+
+Calculando o coeficiente de correlação ($\hat\theta$) da amostra e estimando o intervalo de confiança de 95% "manualmente":
+
+```{r}
+
+theta_c_2 = lastfm %>% 
+  filter(mediana_pop > 5) %>% 
+  summarise(spearman = cor(mediana_pop, prop_news, method = "spearman")) %>%
+  pull(spearman)
+
+um_bootstrap_corr <- function(x){
+  boot_x <- sample_n(x,           # amostre dos dados
+                    size = NROW(x), # tamanho igual ao recebido
+                    replace = TRUE) # aqui é o bootstrap
+  theta_c_sf <- boot_x %>% 
+                  filter(mediana_pop > 5) %>% 
+                  summarise(spearman = cor(mediana_pop,
+                                           prop_news,
+                                           method = "spearman")) %>%
+                  pull(spearman)
+  return(theta_c_sf)
+}
+
+set.seed(1995)
+
+# A REAMOSTRAGEM
+reamostragens_2 = tibble(i = 1:repeticoes) %>% 
+  mutate(theta_c_s = map_dbl(i, ~ um_bootstrap_corr(lastfm)))
+
+intervalo_2 = reamostragens_2 %>%
+  mutate(erro = theta_c_s - theta_c_2) %>% 
+  summarise(erro_i = quantile(erro, .025), 
+            erro_s = quantile(erro, .975))
+
+intervalo_2 = intervalo_2 %>% 
+  mutate(valor_i = theta_c_2 + erro_i, 
+         valor_s = theta_c_2 + erro_s)
+```
+
+Estimando usando o pacote boot:
+
+```{r}
+library(boot)
+library(broom)
+
+theta_corr <- function(d, i) {
+    agrupado = d %>% 
+        slice(i) %>% 
+        filter(mediana_pop > 5) %>% 
+        summarise(spearman = cor(mediana_pop,
+                                 prop_news,
+                                 method = "spearman")) %>%
+        pull(spearman)
+}
+
+booted_2 <- boot(data = lastfm, 
+               statistic = theta_corr, 
+               R = 4000)
+
+ci_2 = tidy(booted_2, 
+          conf.level = .95,
+          conf.method = "bca",
+          conf.int = TRUE)
+```
+
+No gráfico podemos visualizar as estimativas calculadas usando uma implementação própria do bootstrap e usando o bootstrap do pacote _boot_:
+
+```{r}
+
+ggplot() +
+    geom_pointrange(aes(x = "Implementação própria",
+                        y = theta_c_2,
+                        ymin = intervalo_2$valor_i,
+                        ymax = intervalo_2$valor_s
+                    )) +
+    geom_pointrange(aes(x = "Pacote boot",
+                      y = ci_2$statistic,
+                      ymin = ci_2$conf.low,
+                      ymax = ci_2$conf.high
+                      )) +
+    geom_point(size = 3) +
+    labs(x = "Implementação do método de bootstrap", 
+         y = "Correlação de Spearman entre mediana_pop e prop_news",
+         title = expression("\t\tCorrelação: Intervalo estimado via bootstrap - 95% CI"))
+```
+
+A patir desta amostra estimamos que o coeficiente de correlação entre a métrica que indica a popularidade mediana dos artistas escutados e a métrica que indica a proporção dos artistas escutados que eram novos foi de $ \tilde\ 0.003$. A partir da análise do intervalo podemos afirmar com 95% de confiança ou que não há um correlação entre estas métricas, ou que há uma correlação *positiva fraca* ou que há uma correlação *negativa fraca*, pois o coeficiente de correlação na população fica entre $-0.12$ e $0.11$. Os valores para a implemtantação própria foram: $\hat\theta = 0.002998545$, $95\%$ CI [$-0.1167463, 0.1221119$] para a implementação própria e $\hat\theta = 0.002998545$, $95\%$ CI [$-0.1204292, 0.1150907$] para a estimação usando a biblioteca _boot_.
 
